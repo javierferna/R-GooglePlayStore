@@ -1,0 +1,761 @@
+---
+title: "HW1"
+author: "Javier Fernández"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Motivation
+
+This project uses a data set from Google Play applications to perform different models on it. Data cleaning and visualization will also be included in this process.
+
+The core objective is to reveal insights that can fuel app-making businesses to thrive in the Android market. PCA and Factor Analysis will help us identify key factors driving app success. Clustering will allow us to see apps that have similar traits and data visualization will enable us to present data effectively.
+
+This project uses different chunks of code, some available in the lab notebooks in Aula Global.
+
+### The data set
+
+The data set *googleplaystore.csv* includes the following 13 variables:
+
+-   *App* = Name of each of the different apps
+-   *Category* = What each app is related with
+-   *Rating* = Ranking of each of the different apps from 1 to 5
+-   *Reviews* = Number of reviews of each of the different apps
+-   *Size* = Dimension of each of the different apps (in M or K)
+-   *Installs* = Number of installs of each of the different apps
+-   *Type* = Determines whether an app is free or paid
+-   *Price* = Cost of each app (0 if free)
+-   *Content.rating* = The target audience for each of the different apps
+-   *Genres* = Similar to Category, more specific
+-   *Last.updated* = Date when each of the different apps was updated
+-   *Current.ver* = Latest version of each of the different apps
+-   *Android.ver* = Android version for which each of the different apps is developed
+
+### DATA PREPROCESSING
+
+#### Descriptive Analysis
+
+```{r}
+rm(list=ls())
+data = read.csv("googleplaystore.csv")
+head(data)
+dim(data)
+summary(data)
+str(data)
+```
+
+The data set has 10841 rows and 13 variables. Some variables which are characters are supposed to be numeric, we will change them later.
+
+#### Check NA values
+
+```{r}
+for(i in 1:ncol(data)){
+  if(any(is.na(data[,i]))){
+    cat("Variable ", names(data)[i], " has NA values\n")
+  }
+}
+```
+
+Only *Rating* has NA values, we replace them by the mean value of the column.
+
+```{r}
+data$Rating[is.na(data$Rating)] = mean(data$Rating, na.rm = TRUE)
+data$Rating = round(data$Rating, digits=2)
+```
+
+We can see that the indicators *Reviews*, *Size*, *Installs* and *Price* are of class character when they should be numeric in order to create our models, just as the *Rating* indicator.
+
+```{r}
+class(data$Reviews)
+class(data$Size)
+class(data$Installs)
+class(data$Price)
+
+data$Reviews <- as.numeric(data$Reviews)
+which(is.na(data$Reviews))
+```
+
+Row 10473 was 3.0M so it was replaced by an NA and we remove said row.
+
+```{r}
+data <- data[-10473,]
+```
+
+To change *Size* and *Installs* we have to remove the "M", "k", "+" and "," characters respectively first. In the case of M (Megabytes) we will multiply by 10\^6 and k (kilobytes) by 10\^3.
+
+```{r}
+data$Size <- ifelse(grepl("M", data$Size), as.numeric(gsub("M", "", data$Size)) * 10^6, data$Size)
+data$Size <- ifelse(grepl("k", data$Size), as.numeric(gsub("k", "", data$Size)) * 10^3, data$Size)
+data$Installs <- gsub("\\+", "", data$Installs)
+data$Installs <- gsub(",","", data$Installs)
+
+data$Installs <- as.numeric(data$Installs)
+```
+
+We will also change the values in *Size* which are "Varies with device" for the mean size of all the apps as the former doesn't provide meaningful input.
+
+```{r}
+mean_size <- mean(as.numeric(data$Size[data$Size == as.numeric(data$Size)]), na.rm = TRUE)
+data$Size <- gsub("Varies with device", round(mean_size, digits = 0), data$Size)
+data$Size <- as.numeric(data$Size)
+```
+
+We will remove the dollar sign (\$) from the variable *Price* to make it numeric.
+
+```{r}
+unique(data$Price)
+data$Price <- gsub("\\$", "", data$Price)
+data$Price <- as.numeric(data$Price)
+```
+
+Rows for which the *Current.ver* column is "Varies with device" will be removed as it doesn't make sense to replace them by the mean and they aren't useful.
+
+```{r}
+data <- data[data$Current.Ver != "Varies with device", ]
+```
+
+Also, we will only keep the month and the year in Last.Updated for the sake of simplicity.
+
+```{r}
+library(lubridate)
+
+data$Last.Update <- mdy(data$Last.Updated)
+data$Last.Updated <- NULL
+data$Last.Updated <- paste(month(data$Last.Update, label = TRUE), year(data$Last.Update))
+data$Last.Update <- NULL
+```
+
+### VISUALIZATION
+
+```{r}
+library(caret)
+
+featurePlot(x = data[,c("Rating", "Reviews", "Installs", "Price")],
+            y = log(data$Size),
+            plot = "scatter",
+            layout = c(4, 2))
+```
+
+It seems that Rating isn't correlated with Size, as there's no clear relationship between points. In the case of Reviews, Installs and Price we see that a most of the observations are concentrated to the left and they range from small sizes to big ones. However, we see some outliers that may have to be removed.
+
+```{r}
+str(data)
+correlations <- cor(data[c("Rating", "Reviews", "Size", "Installs", "Price")])
+corr_price <- sort(correlations["Price",], decreasing = T)
+corr=data.frame(corr_price)
+ggplot(corr,aes(x = row.names(corr), y = corr_price)) + 
+  geom_bar(stat = "identity", fill = "lightblue") + 
+  scale_x_discrete(limits= row.names(corr)) +
+  labs(x = "", y = "TotalDelay", title = "Correlations") + 
+  theme(plot.title = element_text(hjust = 0, size = rel(1.5)),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+*Price* is barely correlated with all other numeric variables.
+
+We factor the indicators *Category*, *Type*, *Content.Rating*, *Genres* and *Android.Ver* in order to help with the visualization step.
+
+```{r}
+data$Category <- as.factor(data$Category)
+data$Type <- as.factor(data$Type)
+data$Content.Rating <- as.factor(data$Content.Rating)
+data$Genres <- as.factor(data$Genres)
+data$Android.Ver <- as.factor(data$Android.Ver)
+```
+
+In order to produce correct plots *Installs* had to be converted into a factor as well.
+
+```{r}
+library(ggplot2)
+
+str(data)
+data$Installs = as.factor(data$Installs)
+data$Rating = as.numeric(data$Rating)
+```
+
+The first plot shows us the type of app (free or paid) in terms of how many installs said app has. The indicator *Installs* was factored for drawing this specific plot.
+
+```{r}
+ggplot(data = data) + aes(x = Type, color = Installs, fill = Installs) +
+  geom_bar() + labs(title = "Installs depending on app type") +
+  theme(plot.title = element_text(size = 10, hjust = 0.5),
+        text = element_text(size = 10, hjust = 0.5))+
+  theme(legend.position = "bottom")
+```
+
+We can see that free apps have a higher number of installs, as expected.
+
+The second plot shows us the rating of an app depending on the public that uses it.
+
+```{r}
+ggplot(data = data) + aes(x = Rating, fill = Content.Rating, color = Content.Rating) +
+  geom_density(alpha = 0.5) + facet_grid(.~Content.Rating) +
+  labs(title = "App rating relating to public") +
+  theme(plot.title = element_text(size = 10, hjust = 0.5), text =
+          element_text(size = 10, hjust = 0.5))
+```
+
+We can see that apps for Adults only +18 and Unrated apps have a lower variability in terms of rating than the others. This may be the case because in the other categories, apps are directed to everyone and teens, which makes for a wider range of opinions than if only adults were to rate them.
+
+The last plot shows us the rating of an app in terms of how many reviews it has.
+
+```{r}
+ggplot(data = data) + aes(x = Rating, y = Reviews) +
+  geom_jitter(color = "purple") +
+  labs(title = "App rating relating to public") +
+  theme(plot.title = element_text(size = 10, hjust = 0.5), text =
+          element_text(size = 10, hjust = 0.5))
+```
+
+As one may expect, apps with a higher rating usually have a higher number of reviews.
+
+#### Outliers
+
+We will start by drawing a box plot to show the outliers for the variable *Reviews*.
+
+```{r}
+ggplot(data = data) + aes(x = Reviews) +
+  geom_boxplot(fill="lightblue", color="blue", outlier.color = "red", outlier.shape = 16) +
+  labs(title = "Outlier Plot for Reviews") +
+  theme(plot.title = element_text(size = 10, hjust = 0.5),
+        text = element_text(size = 10, hjust = 0.5))
+```
+
+Clearly, this variable has a number of outliers to the right mostly, which belong to the most popular apps in the Play Store.
+
+Note that because our data is quite large, we can remove some of these outliers that my distort our findings with PCA, Factor Analysis and Clustering.
+
+We will therefore create quantiles and with the IQR determine those outliers we will remove from reviews.
+
+```{r}
+QI <- quantile(data$Reviews, 0.25)
+QS <- quantile(data$Reviews, 0.75)
+IQR <- QS-QI
+sum(data$Reviews > QS + 1.5*IQR)
+condition <- data["Reviews"] > QS + 1.5*IQR
+data <- data[!condition,]
+```
+
+We will do the same with apps whose size and price is too large in relation to the other apps.
+
+```{r}
+QI2 <- quantile(data$Size, 0.25)
+QS2 <- quantile(data$Size, 0.75)
+IQR2 <- QS2-QI2
+sum(data$Size > QS2 + 1.5*IQR2)
+condition2 <- data["Size"] > QS2 + 1.5*IQR2
+data <- data[!condition2,]
+```
+
+```{r}
+length(unique(data[,1]))
+```
+
+We are left with a total of 7261 observations, but some elements are repeated because we get 6962 elements when looking for unique elements instead of the whole 7261.
+
+We will remove them:
+
+```{r}
+library(dplyr)
+
+apps <- data[,1]
+data <- data %>% filter(!duplicated(apps))
+```
+
+### PCA
+
+We will only select the numeric variables for this particular model, as PCA can only work with those.
+
+```{r}
+data2 <- data[,c("Rating", "Reviews", "Size", "Installs", "Price")]
+data2[] <- lapply(data2, as.numeric)
+str(data2)
+```
+
+Our input has dimension $p$ = 5, which implies $2^5$ different relations between the variables.
+
+We will draw some box plots to determine whether to scale or not the data.
+
+```{r}
+boxplot(data2, las=2, col="darkblue")
+boxplot(scale(data2), las=2, col="darkblue")
+```
+
+Clearly, we have to scale our data because the indicator *Size* is too big in relation to the others.
+
+```{r}
+data2 <- scale(data2)
+```
+
+```{r}
+library(GGally)
+library(factoextra)
+
+R = cor(data2) # correlation matrix
+ggcorr(data2, label = T)
+```
+
+The plot tells us that *Reviews* and *Installs* are quite positively correlated while *Size* and *Installs*, *Size* and *Reviews* are correlated on a smaller scale as well.
+
+```{r}
+pca = prcomp(data2, scale=T)
+summary(pca)
+
+eigen(R)
+fviz_screeplot(pca, addlabels = TRUE)
+```
+
+Note with 3 components we explain 73,6% of variability.
+
+We will now show the variability explained by each variable for PC1.
+
+```{r}
+barplot(pca$rotation[,1], las=2, col="darkblue")
+fviz_contrib(pca, choice = "var", axes = 1)
+```
+
+We can see that the variables that contribute the most to the explanation of our first PC are *Reviews* and *Installs*. This makes sense as these are the indicators that are determined by the public, i.e., the users of the applications.
+
+Now we can rank the apps by their PC scores.
+
+Worst and best apps in terms of contribution to the overall variance of our data:
+
+```{r}
+apps = data[,1]
+apps[order(pca$x[,1])][(length(apps)-5):length(apps)] # The worst
+apps[order(pca$x[,1])][1:10] # The best
+```
+
+A lot of the "worst apps" for PC1 seem to be game related, while many of the "best apps" that contribute to PC1 seem to be money related.
+
+The second component (PC2) represents the second most significant source of variation in the data, orthogonal to the first principal component (PC1), which represents the most significant source of variation.
+
+```{r}
+barplot(pca$rotation[,2], las=2, col="darkblue")
+fviz_contrib(pca, choice = "var", axes = 2)
+```
+
+In our case, PC2 contrasts user defined variables (*Rating*, *Reviews*) vs all others. It is referred to as slope, which means *Rating* (and Reviews on a smaller scale) will move in opposite direction to the other variables with the slope (PC2).
+
+Worst and best apps in terms of contribution to the variance along the PC2 axis:
+
+```{r}
+apps[order(pca$x[,2])][(length(apps)-5):length(apps)] # The worst
+apps[order(pca$x[,2])][1:10] # The best
+```
+
+The "worst apps" for PC2 are money related, this makes sense because the PC2 axis is orthogonal to the PC1 axis, where these apps perform better. The "best apps" vary in category.
+
+We will now see the loadings of the last component we will be using, PC3.
+
+```{r}
+barplot(pca$rotation[,3], las=2, col="darkblue")
+fviz_contrib(pca, choice = "var", axes = 3)
+```
+
+*Price* seems to be the most relevant loading for PC3. The third component, which is referred to as curvature, has two changes in sign: *Rating*, *Reviews* and *Price* move in the same direction whereas *Size* and *Installs* move in the opposite direction (curvature).
+
+Worst and best apps in terms of contribution to the variance along the PC3 axis:
+
+```{r}
+apps[order(pca$x[,3])][(length(apps)-5):length(apps)] # The worst
+apps[order(pca$x[,3])][1:10] # The best
+```
+
+The "worst apps" for PC3 are varied while to "best apps" are again money related.
+
+We will now see the individual contribution of observations to PC1:
+
+```{r}
+head(get_pca_ind(pca)$contrib[,1]) # this is in %, that is between 0 and 100
+head((pca$x[,1]^2)/(pca$sdev[1]^2))/dim(data)
+```
+
+Contribution of each observation to PC1 is quite low because there are a lot of them.
+
+The 25 observations that contribute the most to PC1 are the following:
+
+```{r}
+fviz_contrib(pca, choice = "ind", axes = 1, top=25)
+```
+
+```{r}
+data[3360,]
+```
+
+The observation that contributes the most to the explanation of PC1 is "Real DJ Simulator", which appeared in our list of worst apps in terms of PC1.
+
+```{r}
+apps_z1 = apps[order(get_pca_ind(pca)$contrib[,1],decreasing=T)]
+fviz_contrib(pca, choice = "ind", axes = 1, top=20)+scale_x_discrete(labels=apps_z1)
+```
+
+#### Biplot
+
+The Biplot for the first 2 principal components is the following:
+
+```{r}
+biplot(pca)
+```
+
+Using contributions instead of observations:
+
+```{r}
+fviz_pca_var(pca, col.var = "contrib")
+```
+
+To make it more visual, we will now a plot similar to the first one which only shows the orthogonal lines without the observations:
+
+```{r}
+fviz_pca_biplot(pca, geom = "var")
+```
+
+We can see that, in 2 dimensions, *Size*, *Installs* and *Reviews* move in a similar direction while rating and price have a very different direction.
+
+We will now see how the first 100 observations relate to the 3 principal components in a 3D space.
+
+```{r}
+library(plotly)
+
+plot <- plot_ly(data = data[1:100,], x = -pca$x[1:100, 1], y = -pca$x[1:100, 2], z = -pca$x[1:100,3], text = data$apps[1:100], type = 'scatter3d', mode = 'markers', marker = list(size = 2, colorscale = 'Viridis'))
+
+layout(plot, scene = list(xaxis = list(title = "PC1"), yaxis = list(title = "PC2"), zaxis = list(title = "PC3")), title = "PCA", margin = list(l = 0, r = 0, b = 0, t = 30))
+```
+
+#### The Scores
+
+Let's plot the first two scores, using colors for the number of reviews and showing 100 observations:
+
+```{r}
+library(tidyverse)
+
+reviews = data[,4]
+data.frame(z1=-pca$x[1:100,1],z2=pca$x[1:100,2]) %>%
+ggplot(aes(z1,z2,label=apps[1:100],color=reviews[1:100])) + geom_point(size=0) +
+labs(title="PCA", x="PC1", y="PC2") +
+theme_bw() + scale_color_gradient(low="cyan3", high="darkorange")+
+theme(legend.position="bottom") + geom_text(size=2, hjust=0.6, vjust=0, check_overlap = TRUE)
+```
+
+The plot tells us that apps that have a low score for both PC1 and PC2 tend to have a higher number of reviews.
+
+What is the app category with the best overall apps?
+
+```{r}
+categories = data[,2]
+data.frame(z1=-pca$x[,1],categories=categories) %>% group_by(categories) %>% summarise(mean=mean(z1)) %>% arrange(desc(mean))
+```
+
+Business seems to be the best app category. This makes sense with our finding of the top 10 apps being something related with money.
+
+Do the "best apps" have a higher rating?
+
+```{r}
+ratings = data[,3]
+data.frame(z1=-pca$x[,1],z2=ratings) %>% 
+  ggplot(aes(z1,z2,label=apps,color=reviews)) + geom_point(size=0) +
+  labs(title="App Rating in terms of PC1", x="PC1", y="Rating") +
+  scale_color_gradient(low="pink", high="darkmagenta") +
+  theme_bw() + theme(legend.position="bottom") + geom_text(size=2, hjust=0.6, vjust=0, check_overlap = TRUE)
+```
+
+Not necessarily, we see that apps that have a high score for PC1 tend to have less reviews than those with a low score for PC1.
+
+### FACTOR ANALYSIS
+
+Estimating the model with 2 factors because we only have 5 numerical variables:
+
+```{r}
+x.f <- factanal(data2, factors = 2, rotation="none", scores="regression")
+x.f
+# Because SS loadings are greater than 1, they're good factors, otherwise the 
+# specific factors wouldn't explain well the data
+
+cbind(x.f$loadings, x.f$uniquenesses)
+
+# we have a vector for each of the factors with indicators, therefore L is a 
+# matrix of dimension nx1
+```
+
+Var explained by first two factors is around 44,5% (we could explain the relationships in the data w/ 2 factors). Although the cumulative variance isn't very high, the SS loadings assure us that the factors chosen are relevant.
+
+The p-value of 0.0668 is greater than the commonly used significance level of 0.05. This suggests that the two-factor solution is a reasonable and sufficient model for our data (we fail to reject the null hypothesis that our model is valid).
+
+#### Interpretation
+
+```{r}
+par(mfrow=c(2,1))
+barplot(x.f$loadings[,1], names=x.f$variables, las=2, col="cadetblue", ylim = c(-1, 1))
+barplot(x.f$loadings[,2], names=x.f$variables, las=2, col="cadetblue", ylim = c(-1, 1))
+```
+
+The factors can be interpreted as two different levels: one with more weights to *Reviews* and *Installs* and the other one with considerably more weight to the other user determined variable: *Rating*.
+
+#### Scores
+
+```{r}
+factor.df <- data.frame(ratings=ratings, x.f$scores) %>% gather("factor", "score", -ratings)
+
+factor.df %>%
+  ggplot(aes(x=ratings,y=score, color=factor)) + geom_line(size=1) +
+  theme_bw() + theme(legend.position="bottom") + scale_color_brewer(palette="Paired") +
+  facet_wrap(~factor, ncol=1) +
+  labs(title="2-factor model", x="", y="scores", col="")
+```
+
+We see that Factor 1 is sensitive to changes in the *Ratings* variable, showing ups and downs in the line, while Factor 2 remains relatively stable and is not strongly influenced by changes in *Ratings*. Therefore, it's clear that *Ratings* has a strong positive relationship with Factor 2.
+
+### CLUSTERING
+
+```{r}
+library(cluster)
+library(mclust)
+```
+
+We will start with an estimation of 5 clusters, which is the number of numeric variables we have.
+
+```{r}
+k <- 5
+fit <- kmeans(data2, centers=k, nstart=1000)
+groups <- fit$cluster
+barplot(table(groups), col="aliceblue")
+```
+
+The groups are rather uneven, one cluster gets roughly half of the observations.
+
+#### Interpretation of centers
+
+```{r}
+centers <- fit$centers
+
+barplot(centers[1,], las=2, col="tomato")
+barplot(centers[2,], las=2, col="tomato")
+barplot(centers[3,], las=2, col="tomato")
+barplot(centers[4,], las=2, col="tomato")
+barplot(centers[5,], las=2, col="tomato")
+```
+
+The biggest group contains apps with low reviews, size and installs (i.e., unsuccessful apps), the smallest group contains apps that have a very high price (i.e., the most expensive apps).
+
+#### Clusplot
+
+We will not show the app names because otherwise the plot is barely visible.
+
+```{r}
+fviz_cluster(fit, data = data2, geom = c("point"),ellipse.type = 'norm', pointsize=1)+
+  theme_minimal()+geom_text(label="",hjust=0, vjust=0,size=2,check_overlap = F)+scale_fill_brewer(palette="Paired")
+```
+
+This approach allows us to see the different apps slightly better, where each number represents an app:
+
+```{r}
+fit.kmeans <- eclust(data2, "kmeans", stand=TRUE, k)
+```
+
+#### Silhouette plot
+
+```{r}
+d <- dist(data2, method="euclidean")  
+sil <- silhouette(groups, d)
+plot(sil, col=1:5, main="", border=NA)
+summary(sil)
+
+# the same with factoextra
+fviz_silhouette(fit.kmeans)
+```
+
+The silhouette coefficient is low, which suggests that some data points are on or very close to the decision boundary between two neighboring clusters. 5 clusters may not be optimal for our data.
+
+We will now try to determine the optimal number of clusters. We will use a subset of 1000 observations because otherwise the plot does not converge.
+
+*Note that this number will depend a lot on the 1000 random observations R chooses.*
+
+```{r}
+data2 <- as.data.frame(data2)
+data3 <- data2
+data3$Apps = apps
+data3 <- data3[sample(nrow(data2), 1000),] 
+
+
+fviz_nbclust(data3[,1:5], kmeans, method = 'silhouette', k.max = 10, nstart = 1000)
+fviz_nbclust(data3[,1:5], kmeans, method = 'wss', k.max = 10, nstart = 1000)
+```
+
+The plots suggests that the optimal number of clusters is between 2 and 5.
+
+Therefore, we will create our clusplot again but with 3 clusters instead of 5.
+
+```{r}
+k <- 3
+fit <- kmeans(data2, centers=k, nstart=1000)
+
+fviz_cluster(fit, data = data2, geom = c("point"),ellipse.type = 'norm', pointsize=1)+
+  theme_minimal()+geom_text(label="",hjust=0, vjust=0,size=2,check_overlap = F)+scale_fill_brewer(palette="Paired")
+
+fit.kmeans <- eclust(data2, "kmeans", stand=TRUE, k)
+```
+
+We can see that we have less overlap with $k$ = 3 than with $k$ = 5.
+
+#### PAM (Partition Around Medioids)
+
+PAM chooses an observation as the centroid rather than the exact mean point, so it is more robust than k-means.
+
+Number of groups by PAM:
+
+*Note that this number will depend a lot on the 1000 random observations R chooses.*
+
+```{r}
+fviz_nbclust(data3[,1:5], pam, method = 'silhouette', k.max = 10)
+fviz_nbclust(data3[,1:5], pam, method = 'wss', k.max = 10, nboot = 500)
+```
+
+```{r}
+fit.pam <- eclust(data2, "pam", stand=TRUE, k, graph=F)
+
+fviz_cluster(fit.pam, data = data2, geom = c("point"), pointsize=1)+
+  theme_minimal()+geom_text(label="",hjust=0, vjust=0,size=2,check_overlap = F)+scale_fill_brewer(palette="Paired")
+```
+
+How similar are the clusters between k-means and PAM?
+
+```{r}
+adjustedRandIndex(fit.kmeans$cluster, fit.pam$clustering)
+```
+
+Our value is somewhat low.
+
+#### Kernel k-means
+
+Kernel k-means elevates our data to higher dimensions to identify relationships that aren't visible otherwise. We will sample 1000 observations because otherwise the plot does not work.
+
+```{r}
+library(kernlab)
+
+fit.ker <- kkmeans(as.matrix(data3[,1:5]), centers=k, kernel="rbfdot") # Radial Basis kernel (Gaussian)
+
+# By default, Gaussian kernel is used
+# By default, sigma parameter is estimated
+# Here, we are using scaled data. However, the Gaussian kernel is not match influenced for
+# non scaled data, so it isn't necessary
+
+centers(fit.ker)
+size(fit.ker)
+withinss(fit.ker)
+
+object.ker = list(data = data3[,1:5], cluster = fit.ker@.Data)
+fviz_cluster(object.ker, geom = c("point"), ellipse=F,pointsize=1)+
+  theme_minimal()+geom_text(label=data3$Apps,hjust=0, vjust=0,size=2,check_overlap = T)+scale_fill_brewer(palette="Paired")
+```
+
+#### Hierarchical clustering
+
+In the hierarchical method, we group our data into different clusters depending on the height. From bottom to top, we select the 2 closest observations, then the next 2 and so on. Then we join one observation that is closest to 2 observations... Here we are minimizing the distance between clusters.
+
+We will use 100 random observations to show in our dendogram and tree:
+
+```{r}
+data4 <- data2
+data4$Apps = apps
+data4 = data4[sample(nrow(data2), 100),] 
+d = dist(data4[,1:5], method = "euclidean")
+hc <- hclust(d, method = "ward.D2") 
+```
+
+#### Visualization
+
+```{r}
+hc$labels <- data4$Apps
+
+fviz_dend(x = hc, 
+          k=3,
+          palette = "jco", 
+          rect = TRUE, rect_fill = TRUE, cex=0.5,
+          rect_border = "jco"          
+)
+```
+
+Using a phylogenic tree:
+
+```{r}
+library(igraph)
+
+fviz_dend(x = hc,
+          k = 3,
+          color_labels_by_k = TRUE,
+          cex = 0.8,
+          type = "phylogenic",
+          repel = TRUE)+  labs(title="Play Store Apps tree clustering") + theme(axis.text.x=element_blank(),axis.text.y=element_blank())
+```
+
+#### EM clustering
+
+Expectation-Maximization clustering is like k-means, but it computes probabilities of cluster memberships based on probability distributions.
+
+The formula for $A(A, B)$, where $A$ and $B$ are clusters, is:
+
+$$
+A(A, B) = \frac{|A| \cdot |B|}{|A| + |B|} \cdot d(A, B)
+$$
+
+```{r}
+res.Mclust <- Mclust(data3[,1:5])
+summary(res.Mclust)
+
+# The clustering is probabilistic: for each app we have the probabilities the 
+# app belongs to each of the groups
+
+head(res.Mclust$z)
+
+# The tool assigns each observation to the group with highest probability  
+head(res.Mclust$classification)
+```
+
+*Note that the number of optimal clusters will depend heavily on the 1000 random observations R chooses.*
+
+```{r}
+fviz_mclust(object = res.Mclust, what = "BIC", pallete = "jco") +
+  scale_x_discrete(limits = c(1:10))
+```
+
+```{r}
+fviz_mclust(object = res.Mclust, what = "classification", geom = "point",
+            pallete = "jco")
+```
+
+We will see how similar the clusters are with all observations, not just 1000.
+
+```{r}
+res.Mclust <- Mclust(data2)
+d = dist(data2, method = "euclidean")
+hc <- hclust(d, method = "ward.D2") 
+groups.hc = cutree(hc, k = 8)
+
+adjustedRandIndex(res.Mclust$classification, fit.pam$clustering) 
+adjustedRandIndex(res.Mclust$classification, groups.hc) 
+```
+
+The result is low, which suggests that there may be some differences in the way these methods have clustered the data.
+
+#### Heatmap
+
+A heatmap is a color-coded representation accompanied by dendrograms on both the left and top sides.
+
+```{r}
+data4$Apps = NULL
+data4 = as.matrix(data4)
+dim(data4)
+heatmap(data4, scale = "none",
+        distfun = function(x){dist(x, method = "euclidean")},
+        hclustfun = function(x){hclust(x, method = "ward.D2")},
+        cexRow = 0.7)
+
+```
+
+## Conclusion
+
+In our analysis of this data set, we've employed a range of models to achieve significant results. These include the creation of insightful data visualizations to enhance our model understanding, reducing data dimensionality, uncovering latent factors that reveal hidden relationships within our data, and organizing observations into clusters based on common traits.
