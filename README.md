@@ -2,12 +2,16 @@
 
 Google Play App Analysis is a data science project that examines a dataset of applications from the Google Play Store. By leveraging data cleaning, visualization, and modeling, this project aims to uncover insights that can empower app developers and businesses to succeed in the Android market.
 
+---
+
 ## Key Highlights
 
 * 📊 Perform data cleaning and exploratory data analysis to gain a better understanding of app characteristics
 * 🧩 Use PCA and Factor Analysis to identify crucial factors influencing app success
 * 🔍 Cluster similar apps to find trends and commonalities
 * 📈 Visualize data to present findings in a clear, insightful way
+
+---
 
 ## Dataset Overview
 
